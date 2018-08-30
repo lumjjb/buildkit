@@ -16,12 +16,14 @@ import (
 	"github.com/moby/buildkit/util/progress"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
+    "github.com/sirupsen/logrus"
 )
 
 type ExporterVariant string
 
 const (
 	keyImageName  = "name"
+	keyEncryptOpt = "encrypt"
 	VariantOCI    = "oci"
 	VariantDocker = "docker"
 	ociTypes      = "oci-mediatypes"
@@ -38,6 +40,7 @@ type imageExporter struct {
 }
 
 func New(opt Opt) (exporter.Exporter, error) {
+    logrus.Debugf("LUM: Exporter Created")
 	im := &imageExporter{opt: opt}
 	return im, nil
 }
@@ -61,11 +64,14 @@ func (e *imageExporter) Resolve(ctx context.Context, opt map[string]string) (exp
 	for k, v := range opt {
 		switch k {
 		case keyImageName:
+            logrus.Debugf("LUM: keyImageName %v", v)
 			parsed, err := reference.ParseNormalizedNamed(v)
 			if err != nil {
 				return nil, errors.Wrapf(err, "failed to parse %s", v)
 			}
 			i.name = reference.TagNameOnly(parsed).String()
+		case keyEncryptOpt:
+            logrus.Debugf("LUM: keyEncryptOpt %v", v)
 		case ociTypes:
 			ot = new(bool)
 			if v == "" {
@@ -127,6 +133,7 @@ func (e *imageExporterInstance) Export(ctx context.Context, src exporter.Source)
 		desc.Annotations = map[string]string{}
 	}
 	desc.Annotations[ocispec.AnnotationCreated] = time.Now().UTC().Format(time.RFC3339)
+	desc.Annotations["encryptedImage"] = "YES"
 
 	exp, err := getExporter(e.opt.Variant, e.name)
 	if err != nil {
