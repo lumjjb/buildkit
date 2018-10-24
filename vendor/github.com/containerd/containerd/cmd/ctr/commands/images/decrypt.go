@@ -48,6 +48,9 @@ var decryptCommand = cli.Command{
 	}, cli.StringFlag{
 		Name:  "gpg-version",
 		Usage: "The GPG version (\"v1\" or \"v2\"), default will make an educated guess",
+	}, cli.StringSliceFlag{
+		Name:  "key",
+		Usage: "A secret key's filename; may be provided multiple times",
 	}),
 	Action: func(context *cli.Context) error {
 		local := context.Args().First()
@@ -101,7 +104,13 @@ var decryptCommand = cli.Command{
 			return nil
 		}
 
-		layerSymKeyMap, err := images.GetSymmetricKeys(layerInfos, gpgClient)
+		gpgVault := images.NewGPGVault()
+		err = gpgVault.AddSecretKeyRingFiles(context.StringSlice("key"))
+		if err != nil {
+			return err
+		}
+
+		layerSymKeyMap, err := images.GetSymmetricKeys(layerInfos, gpgClient, gpgVault)
 		if err != nil {
 			return err
 		}

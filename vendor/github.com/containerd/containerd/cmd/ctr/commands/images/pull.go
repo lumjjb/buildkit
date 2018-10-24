@@ -59,6 +59,9 @@ command. As part of this process, we do the following:
 		}, cli.StringFlag{
 			Name:  "gpg-version",
 			Usage: "The GPG version (\"v1\" or \"v2\"), default will make an educated guess",
+		}, cli.StringSliceFlag{
+			Name:  "key",
+			Usage: "A secret key's filename; may be provided multiple times",
 		},
 	),
 	Action: func(context *cli.Context) error {
@@ -128,10 +131,17 @@ command. As part of this process, we do the following:
 		if err != nil {
 			return errors.New("Unable to create GPG Client")
 		}
+		gpgVault := images.NewGPGVault()
+		err = gpgVault.AddSecretKeyRingFiles(context.StringSlice("key"))
+		if err != nil {
+			return err
+		}
 
 		for _, platform := range p {
 			fmt.Printf("unpacking %s %s...\n", platforms.Format(platform), img.Target.Digest)
-			i := containerd.NewImageWithPlatform(client, img, platforms.Only(platform), gpgClient)
+			i := containerd.NewImageWithPlatform(client, img, platforms.Only(platform))
+			i.SetGPGClient(gpgClient)
+			i.SetGPGVault(gpgVault)
 			err = i.Unpack(ctx, context.String("snapshotter"))
 			if err != nil {
 				return err

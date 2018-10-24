@@ -482,8 +482,15 @@ func encryptLayer(cc *CryptoConfig, data []byte, desc ocispec.Descriptor, layerN
 		newDesc.MediaType = MediaTypeDockerSchema2LayerGzipPGP
 	case MediaTypeDockerSchema2LayerPGP:
 		newDesc.MediaType = MediaTypeDockerSchema2LayerPGP
+
+		// TODO: Mediatypes to be added in ocispec
+	case ocispec.MediaTypeImageLayerGzip:
+		newDesc.MediaType = MediaTypeDockerSchema2LayerGzipPGP
+	case ocispec.MediaTypeImageLayer:
+		newDesc.MediaType = MediaTypeDockerSchema2LayerPGP
+
 	default:
-		return ocispec.Descriptor{}, []byte{}, errors.Wrapf(err, "Encryption: unsupporter layer MediaType: %s\n", desc.MediaType)
+		return ocispec.Descriptor{}, []byte{}, errors.Errorf("Encryption: unsupporter layer MediaType: %s\n", desc.MediaType)
 	}
 	return newDesc, p, nil
 }
@@ -508,7 +515,7 @@ func decryptLayer(cc *CryptoConfig, data []byte, desc ocispec.Descriptor, layerN
 	case MediaTypeDockerSchema2LayerPGP:
 		newDesc.MediaType = MediaTypeDockerSchema2Layer
 	default:
-		return ocispec.Descriptor{}, []byte{}, errors.Wrapf(err, "Decryption: unsupporter layer MediaType: %s\n", desc.MediaType)
+		return ocispec.Descriptor{}, []byte{}, errors.Errorf("Decryption: unsupporter layer MediaType: %s\n", desc.MediaType)
 	}
 	return newDesc, p, nil
 }
@@ -675,7 +682,8 @@ func cryptChildren(ctx context.Context, cs content.Store, desc ocispec.Descripto
 		switch child.MediaType {
 		case MediaTypeDockerSchema2Config, ocispec.MediaTypeImageConfig:
 			config = child
-		case MediaTypeDockerSchema2LayerGzip, MediaTypeDockerSchema2Layer:
+		case MediaTypeDockerSchema2LayerGzip, MediaTypeDockerSchema2Layer,
+			ocispec.MediaTypeImageLayerGzip, ocispec.MediaTypeImageLayer:
 			if encrypt && isUserSelectedLayer(layerNum, layersTotal, lf.Layers) && isUserSelectedPlatform(thisPlatform, lf.Platforms) {
 				nl, err := cryptLayer(ctx, cs, child, cc, layerNum, thisPlatform, true)
 				if err != nil {
@@ -701,7 +709,7 @@ func cryptChildren(ctx context.Context, cs content.Store, desc ocispec.Descripto
 			}
 			layerNum = layerNum + 1
 		default:
-			return ocispec.Descriptor{}, false, errors.Wrapf(err, "Bad/unhandled MediaType %s in encryptChildren\n", child.MediaType)
+			return ocispec.Descriptor{}, false, errors.Errorf("Bad/unhandled MediaType %s in encryptChildren\n", child.MediaType)
 		}
 	}
 
@@ -824,12 +832,12 @@ func cryptManifestList(ctx context.Context, cs content.Store, desc ocispec.Descr
 // representing a manifest list or a single manifest
 func CryptImage(ctx context.Context, cs content.Store, desc ocispec.Descriptor, cc *CryptoConfig, lf *LayerFilter, encrypt bool) (ocispec.Descriptor, bool, error) {
 	switch desc.MediaType {
-	case MediaTypeDockerSchema2ManifestList:
+	case ocispec.MediaTypeImageIndex, MediaTypeDockerSchema2ManifestList:
 		return cryptManifestList(ctx, cs, desc, cc, lf, encrypt)
 	case ocispec.MediaTypeImageManifest, MediaTypeDockerSchema2Manifest:
 		return cryptManifest(ctx, cs, desc, cc, lf, encrypt)
 	default:
-		return ocispec.Descriptor{}, false, errors.Wrapf(errdefs.ErrInvalidArgument, "CryptImage: Unhandled media type: %s", desc.MediaType)
+		return ocispec.Descriptor{}, false, errors.Errorf("CryptImage: Unhandled media type: %s", desc.MediaType)
 	}
 }
 
@@ -921,7 +929,7 @@ func getImageLayerInfo(ctx context.Context, cs content.Store, desc ocispec.Descr
 // rootfs.Layer with the OCI descriptors adapted to point to the decrypted layers.
 // This function will determine the necessary key(s) to decrypt the image and search
 // for them using the gpg client
-func DecryptLayers(ctx context.Context, cs content.Store, layers []rootfs.Layer, gpgClient GPGClient) ([]rootfs.Layer, error) {
+func DecryptLayers(ctx context.Context, cs content.Store, layers []rootfs.Layer, gpgClient GPGClient, gpgVault GPGVault) ([]rootfs.Layer, error) {
 	var (
 		newLayers      []rootfs.Layer
 		layerInfos     []LayerInfo
@@ -961,7 +969,7 @@ func DecryptLayers(ctx context.Context, cs content.Store, layers []rootfs.Layer,
 	}
 
 	// in ctr case we may just want to consult gpg/gpg2 for the key(s)
-	layerSymKeyMap, err = GetSymmetricKeys(layerInfos, gpgClient)
+	layerSymKeyMap, err = GetSymmetricKeys(layerInfos, gpgClient, gpgVault)
 	if err != nil {
 		return []rootfs.Layer{}, err
 	}

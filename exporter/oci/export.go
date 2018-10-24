@@ -2,7 +2,9 @@ package oci
 
 import (
 	"context"
+	"encoding/base64"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/containerd/containerd/images"
@@ -16,17 +18,19 @@ import (
 	"github.com/moby/buildkit/util/progress"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-    "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 )
 
 type ExporterVariant string
 
 const (
-	keyImageName  = "name"
-	keyEncryptOpt = "encrypt"
-	VariantOCI    = "oci"
-	VariantDocker = "docker"
-	ociTypes      = "oci-mediatypes"
+	keyImageName         = "name"
+	keyEncrypt           = "encrypt"
+	keyEncryptRecipients = "encrypt-recipients"
+	keyGpgKeyRing        = "gpgKeyRing"
+	VariantOCI           = "oci"
+	VariantDocker        = "docker"
+	ociTypes             = "oci-mediatypes"
 )
 
 type Opt struct {
@@ -40,7 +44,6 @@ type imageExporter struct {
 }
 
 func New(opt Opt) (exporter.Exporter, error) {
-    logrus.Debugf("LUM: Exporter Created")
 	im := &imageExporter{opt: opt}
 	return im, nil
 }
@@ -60,18 +63,29 @@ func (e *imageExporter) Resolve(ctx context.Context, opt map[string]string) (exp
 	}
 
 	var ot *bool
-	i := &imageExporterInstance{imageExporter: e, caller: caller}
+	i := &imageExporterInstance{imageExporter: e, caller: caller, encrypt: false}
+	i.encConfig = &images.CryptoConfig{
+		Ec: &images.EncryptConfig{},
+	}
 	for k, v := range opt {
 		switch k {
 		case keyImageName:
-            logrus.Debugf("LUM: keyImageName %v", v)
 			parsed, err := reference.ParseNormalizedNamed(v)
 			if err != nil {
 				return nil, errors.Wrapf(err, "failed to parse %s", v)
 			}
 			i.name = reference.TagNameOnly(parsed).String()
-		case keyEncryptOpt:
-            logrus.Debugf("LUM: keyEncryptOpt %v", v)
+		case keyGpgKeyRing:
+			i.encConfig.Ec.GPGPubRingFile, err = base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				return nil, errors.Wrapf(err, "failed to decode GpgKeyRing")
+			}
+		case keyEncryptRecipients:
+			i.encConfig.Ec.Recipients = strings.Split(v, ",")
+
+		case keyEncrypt:
+			i.encrypt = true
+			i.encConfig.Ec.Operation = images.OperationAddRecipients
 		case ociTypes:
 			ot = new(bool)
 			if v == "" {
@@ -100,10 +114,12 @@ func (e *imageExporter) Resolve(ctx context.Context, opt map[string]string) (exp
 
 type imageExporterInstance struct {
 	*imageExporter
-	meta     map[string][]byte
-	caller   session.Caller
-	name     string
-	ociTypes bool
+	meta      map[string][]byte
+	caller    session.Caller
+	name      string
+	ociTypes  bool
+	encrypt   bool
+	encConfig *images.CryptoConfig
 }
 
 func (e *imageExporterInstance) Name() string {
@@ -133,8 +149,20 @@ func (e *imageExporterInstance) Export(ctx context.Context, src exporter.Source)
 		desc.Annotations = map[string]string{}
 	}
 	desc.Annotations[ocispec.AnnotationCreated] = time.Now().UTC().Format(time.RFC3339)
-	desc.Annotations["encryptedImage"] = "YES"
 
+	// XXX : Add enc start
+	layerFilter := &images.LayerFilter{Layers: nil, Platforms: nil}
+	newDesc, b, err := images.CryptImage(ctx, e.opt.ImageWriter.ContentStore(), *desc, e.encConfig, layerFilter, true)
+	if err != nil {
+	}
+
+	if b {
+		oldDesc := *desc
+		desc = &newDesc
+		desc.Annotations = oldDesc.Annotations
+	}
+
+	// XXX : Add enc end
 	exp, err := getExporter(e.opt.Variant, e.name)
 	if err != nil {
 		return nil, err
@@ -144,6 +172,7 @@ func (e *imageExporterInstance) Export(ctx context.Context, src exporter.Source)
 	if err != nil {
 		return nil, err
 	}
+
 	report := oneOffProgress(ctx, "sending tarball")
 	if err := exp.Export(ctx, e.opt.ImageWriter.ContentStore(), *desc, w); err != nil {
 		w.Close()

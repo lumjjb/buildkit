@@ -2,12 +2,14 @@ package client
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/containerd/containerd/images"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/identity"
@@ -90,6 +92,43 @@ func (c *Client) solve(ctx context.Context, def *llb.Definition, runGateway runG
 
 	for _, a := range opt.Session {
 		s.Allow(a)
+	}
+
+	var (
+		keyEncrypt           = "encrypt"
+		keyEncryptRecipients = "encrypt-recipients"
+		keyGpgVersion        = "gpg-version"
+		keyGpgHomeDir        = "gpg-homedir"
+	)
+
+	if _, ok := opt.ExporterAttrs[keyEncrypt]; ok {
+		encryptRecipients := opt.ExporterAttrs[keyEncryptRecipients]
+		if encryptRecipients == "" {
+			return nil, errors.New("Encrypt recipients is empty")
+		}
+		gpgVersion := opt.ExporterAttrs[keyGpgVersion]
+		gpgHomedir := opt.ExporterAttrs[keyGpgHomeDir]
+
+		// Create gpg client
+		v := new(images.GPGVersion)
+		switch gpgVersion {
+		case "v1":
+			*v = images.GPGv1
+		case "v2":
+			*v = images.GPGv2
+		default:
+			v = nil
+		}
+		gpgClient, err := images.NewGPGClient(v, gpgHomedir)
+		if err != nil {
+			return nil, err
+		}
+		gpgPubRingFile, err := gpgClient.ReadGPGPubRingFile()
+		if err != nil {
+			return nil, err
+		}
+
+		opt.ExporterAttrs["gpgKeyRing"] = base64.StdEncoding.EncodeToString(gpgPubRingFile)
 	}
 
 	switch opt.Exporter {
